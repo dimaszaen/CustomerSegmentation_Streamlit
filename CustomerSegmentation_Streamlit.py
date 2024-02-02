@@ -1,32 +1,41 @@
+from sys import displayhook
+from tkinter.tix import DisplayStyle
+from matplotlib import cm
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import plotly.express as px
+from sklearn.calibration import LabelEncoder
 from sklearn.cluster import KMeans
 import pickle
+from sklearn.discriminant_analysis import StandardScaler
+from sklearn.metrics import confusion_matrix, silhouette_samples, silhouette_score
+from sklearn.preprocessing import MinMaxScaler
 import streamlit as st
 import os
 from datetime import datetime
 import squarify
 import base64
+from scipy.stats import entropy
+
 
 # GUI setup
 st.title("OPTIMALISASI PENENTUAN PUSAT TITIK CLUSTERING K-MEANS DAN MODIFIKASI RFM UNTUK SEGMENTASI PELANGGAN RETAIL PADA PERUSAHAAN JASA PENGIRIMAN EXPRESS DALAM MENUNJANG STRATEGI PROMOSI")
 st.header(" Tesis 2011600026 Dimas Zaen Fikri Amar", divider='rainbow')
 
-menu = ["Business Understanding", "Data Understanding","Data preparation","Modeling & Evaluation","Predict"] # , "BigData: Spark"
+menu = ["Business Understanding", "Data Understanding","Data preparation","Modeling & Evaluation"] # , "BigData: Spark"
 choice = st.sidebar.selectbox('Menu', menu)
 
 def load_data(uploaded_file):
     if uploaded_file is not None:
         st.sidebar.success("File uploaded successfully!")
-        df = pd.read_csv(uploaded_file, encoding='latin-1', sep='\s+', header=None, 
-                         names=['Cust_Branch', 'Cust_Phone','Cust_Name'	
+        df = pd.read_csv(uploaded_file, encoding='latin-1', sep=';', header=None, 
+                         names=['Cust_Branch', 'Cust_Phone','Cust_Name'	,
                                 'ReceiptNo','ReceiptDate',	
                                 'Total_Package', 'Total_Weight',	
                                 'Total_Received_Amount','Deleted_Flag'])
         df.to_csv("CDNOW_master_new.txt", index=False)
-        df['ReceiptDate'] = pd.to_datetime(df['ReceiptDate'], format='%Y%m%d')
         st.session_state['df'] = df
         return df
     else:
@@ -60,11 +69,12 @@ if choice == 'Business Understanding':
     
 elif choice == 'Data Understanding':    
 
+    st.title("### Data Understanding")
    # Daftar semua file di folder 'sample_data'
     sample_files = os.listdir('data')
     
     # Create a radio button to allow users to choose between using a sample file or uploading a new file
-    data_source = st.sidebar.radio('Data source', ['Use a sample file', 'Upload a new file'])
+    data_source = st.sidebar.radio('Data source', ['Upload a new file'])
     
     if data_source == 'Use a sample file':
         # Allows the user to select a file from the list
@@ -77,7 +87,7 @@ elif choice == 'Data Understanding':
 
     else:
        # Allows users to upload a new file
-        st.session_state['uploaded_file'] = st.sidebar.file_uploader("Choose a file", type=['txt'])
+        st.session_state['uploaded_file'] = st.sidebar.file_uploader("Choose a file", type=['csv'])
         
         if st.session_state['uploaded_file'] is not None:
             load_data(st.session_state['uploaded_file'])
@@ -93,109 +103,136 @@ elif choice == 'Data Understanding':
         st.write(st.session_state['df'].head())
 
 elif choice == 'Data preparation': 
-    st.write("### Data Cleaning")
     
+    st.title("### Data Preparation") 
+    st.write("### Data Cleaning")
     if st.session_state['df'] is not None:
-        # 1. Handling missing, null, and duplicate values
-        st.write("Number of missing values:")
-        st.write(st.session_state['df'].isnull().sum())
-
-        st.write("Number of NA values:")
-        st.write((st.session_state['df'] == 'NA').sum())
-
-        st.write("Number of duplicate rows:", st.session_state['df'].duplicated().sum())
-
-        # Providing options for handling missing and duplicate values
-        if st.checkbox('Remove duplicate rows'):
-            st.session_state['df'].drop_duplicates(inplace=True)
-            st.write("Duplicate rows removed.")
         
-        if st.checkbox('Remove rows with NA values'):
-            st.session_state['df'].replace('NA', pd.NA, inplace=True)
-            st.session_state['df'].dropna(inplace=True)
-            st.write("Rows with NA values removed.")
-            
-        # 2. Display number of unique values for each column
-        st.write("Number of unique values for each column:")
-        st.write(st.session_state['df'].nunique())
-
-        # 3. Plotting distribution for numeric columns
-        st.write("### Distribution plots")
-        for col in st.session_state['df'].select_dtypes(include=['number']).columns:
-            st.write(f"#### {col}")
-            fig, ax = plt.subplots()
-            st.session_state['df'][col].hist(ax=ax)
-            st.pyplot(fig)
-
-        # 4. Display boxplots for numeric columns
-        st.write("### Boxplots for numeric columns")
-        for col in st.session_state['df'].select_dtypes(include=['number']).columns:
-            st.write(f"#### {col}")
-            fig, ax = plt.subplots()
-            st.session_state['df'].boxplot(column=col, ax=ax)
-            st.pyplot(fig)
-
-        # Additional Data Overview
-        st.write("Transactions timeframe from {} to {}".format(st.session_state['df']['day'].min(), st.session_state['df']['day'].max()))
-        st.write("{:,} transactions don't have a customer id".format(st.session_state['df'][st.session_state['df'].Customer_id.isnull()].shape[0]))
-        st.write("{:,} unique customer_id".format(len(st.session_state['df'].Customer_id.unique())))
-
-        # Add Data Transformation ['Customer_id', 'day', 'Quantity', 'Sales']
-        st.write("### Data Transformation")
-        # Group the data by Customer_id and sum the other columns, excluding 'day'
-        user_grouped = st.session_state['df'].groupby('Customer_id').agg({'Quantity': 'sum', 'Sales': 'sum'})
-        st.write("### User Grouped Data")
-        st.write(user_grouped.head())
-
-        # Create a new column for the month
-        st.session_state['df']['month'] = st.session_state['df']['day'].values.astype('datetime64[M]')
-        st.write("### Data with Month Column")
-        st.write(st.session_state['df'].head())
-
-        # Plot the total Sales per month
-        st.write("### Total Sales per Month")
-        dfm = st.session_state['df'].groupby('month')['Quantity'].sum()
-        st.line_chart(dfm)
-
-        # Plot the total Quantity per month
-        st.write("### Total Quantity per Month")
-        dfpc = st.session_state['df'].groupby('month')['Sales'].sum()
-        st.line_chart(dfpc)
-
-        # ... (rest of your code, don't forget to modify scatter plots too)
-
-        st.write("### Scatter Plot: Sales vs Quantity for Individual Transactions")
-        fig, ax = plt.subplots()
-        ax.scatter(st.session_state['df']['Sales'], st.session_state['df']['Quantity'])
-        st.pyplot(fig)
-
-        st.write("### Scatter Plot: Sales vs Quantity for User Grouped Data")
-        fig, ax = plt.subplots()
-        ax.scatter(user_grouped['Sales'], user_grouped['Quantity'])
-        st.pyplot(fig)
+        df= st.session_state['df']
+        df = df[df['Deleted_Flag'] != 'Y']
+        df = df[(~df['Cust_Name'].str.contains('ittest', case=False, na=False))]
+        df = df[df['Total_Received_Amount'] > 0]
+        df = df[df['Total_Package'] > 0]
+        
+        st.write(df.count())
+        
+        
+        
     else:
         st.write("No data available. Please upload a file in the 'Data Understanding' section.")
     
+    st.write("### Selection Data")
+    st.session_state['df'][['Cust_Phone', 'Cust_Name', 'ReceiptNo', 'ReceiptDate', 'Total_Package', 'Total_Weight', 'Total_Received_Amount']]
+  
+    
+    st.write("### Transformasi Data")
+    # For recency will check what was the last date of transaction
+    #First will convert the InvoiceDate as date variable
+
+    df = pd.DataFrame(df)
+    df['Receipt_Date'] = pd.to_datetime(df['ReceiptDate'])
+    df['Receipt_Date'].max()
+
+    # Tanggal analisis
+    analysis_date =  pd.to_datetime('2024-01-01') #datetime.now()
+
+    # Recency (R)
+    df['Recency'] = (analysis_date - df.groupby('Cust_Phone')['Receipt_Date'].transform('max')).dt.days
+
+    # Frequency (F)
+    frequency_df = df.groupby('Cust_Phone')['Receipt_Date'].count().reset_index()
+    frequency_df.columns = ['Cust_Phone', 'Frequency']
+    df = pd.merge(df, frequency_df, on='Cust_Phone', how='left')
+
+    # Monetary (M)
+    monetary_df = df.groupby('Cust_Phone')['Total_Received_Amount'].sum().reset_index()
+    monetary_df.columns = ['Cust_Phone', 'Monetary']
+    df = pd.merge(df, monetary_df, on='Cust_Phone', how='left')
+
+    # Menambahkan Weight
+    quantity_df = df.groupby('Cust_Phone')[['Total_Package']].sum().reset_index()
+    quantity_df.columns = ['Cust_Phone', 'Quantity']
+    df = pd.merge(df, quantity_df, on='Cust_Phone', how='left')
+
+    # Menambahkan Weight
+    weight_df = df.groupby('Cust_Phone')[['Total_Weight']].sum().reset_index()
+    weight_df.columns = ['Cust_Phone', 'Weight']
+    df = pd.merge(df, weight_df, on='Cust_Phone', how='left')
+
+    # Tampilkan hasil
+    st.write(df[['Cust_Phone', 'Recency', 'Frequency', 'Monetary','Quantity', 'Weight',]])
+    
+    st.write("### Normalisasi Data")
+    # Calculate 'Length' based on the difference between the current date and the minimum date
+    df['Receipt_Date'] = pd.to_datetime(df['ReceiptDate'])
+    analysis_date = pd.to_datetime('2024-01-01')
+
+    # Select the columns you want to normalize
+    columns_to_normalize = ['Recency', 'Frequency', 'Monetary', 'Quantity', 'Weight']
+
+    # Initialize the MinMaxScaler
+    scaler = MinMaxScaler()
+
+    # Fit and transform the selected columns
+    df_normalized = pd.DataFrame(scaler.fit_transform(df[columns_to_normalize]), columns=columns_to_normalize)
+
+    # Combine the normalized columns with the rest of the DataFrame
+    df = pd.concat([df.drop(columns=columns_to_normalize), df_normalized], axis=1)
+    
+    st.session_state['df'] = df
+
+    # Tampilkan hasil
+    st.write(df[['Cust_Phone', 'Recency', 'Frequency', 'Monetary','Quantity', 'Weight']])
+    
+    
    
-
 elif choice == 'Modeling & Evaluation':
-    st.write("### Modeling With KMeans")
+    st.title("### Modeling & Evaluation") 
+
     if st.session_state['df'] is not None:
-        # RFM Analysis
-        recent_date = st.session_state['df']['day'].max()
-
+        
+       # Statistik Deskriptif
+        st.write("### Pemodelan RFM Modifikasi")
+        
+        st.write("Statistik Deskriptif")
+        st.write(st.session_state['df'].describe())
+        df= st.session_state['df']
+        df = pd.DataFrame(df)
+        
+        st.write("RFM Modifikasi Normalisasi")
+        st.write(df[['Recency', 'Frequency', 'Monetary','Quantity', 'Weight']])
+        
+        st.write("### Pemodelan Clustering K-Means ")
+        
+        
+        
+    if st.session_state['df'] is not None:
+        
+        
+        st.write("### Mencari nilai-K Optimal")
         # Calculate Recency, Frequency, and Monetary value for each customer
-        df_RFM = st.session_state['df'].groupby('Customer_id').agg({
-            'day': lambda x: (recent_date - x.max()).days, # Recency
-            'Customer_id': 'count', # Frequency
-            'Sales': 'sum' # Monetary
-        }).rename(columns={'day': 'Recency', 'Customer_id': 'Frequency', 'Sales': 'Monetary'})
+        df_RFM = df[['Recency', 'Frequency', 'Monetary','Quantity', 'Weight']]
+        
+    
+        # Allows the user to choose the number of clusters k
+        n_clusters = st.sidebar.number_input('Choose the number of clusters k from 2 to 20:', min_value=2, max_value=20, value=3, step=1, key="cluster_value")
+        st.write(f'You have selected division {n_clusters} cluster.')
+        
+        
+        # Normalisasi data
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(df_RFM)
 
-        st.title('KMeans Analysis using Elbow Method')
+        # Hitung WSS untuk berbagai jumlah klaster (misalnya, dari 1 hingga 10)
+        wss_values = []
+        for k in range(1, 11):
+            kmeans = KMeans(n_clusters=k, random_state=42)
+            kmeans.fit(X_scaled)
+            wss_values.append(kmeans.inertia_)
 
         # Build and display Elbow Method charts
         sse = {}
-        for k in range(1, 20):
+        for k in range(1, 11):
             kmeans = KMeans(n_clusters=k, random_state=42)
             kmeans.fit(df_RFM)
             sse[k] = kmeans.inertia_
@@ -205,153 +242,217 @@ elif choice == 'Modeling & Evaluation':
         ax.set_xlabel('Number of clusters (k)')
         ax.set_ylabel('Sum of Squares of distances')
         sns.pointplot(x=list(sse.keys()), y=list(sse.values()), ax=ax)
+        sns.pointplot(x=list(range(1, 11)), y=wss_values, ax=ax)  # Use the range 1 to 10 for x-axis
+        ax.axvline(x=n_clusters, color='r', linestyle='--', label=f'Chosen k={n_clusters}')
         st.pyplot(fig)
-
-        # Allows the user to choose the number of clusters k
-        n_clusters = st.sidebar.number_input('Choose the number of clusters k from 2 to 20:', min_value=2, max_value=20, value=3, step=1, key="cluster_value")
+        
+        # Menampilkan DataFrame dengan hasil klaster
+        #clustered_df = df[['Recency', 'Frequency', 'Monetary', 'Quantity', 'Weight', 'Cluster']]
+        st.write(df)
+  
+        st.write("### Pembuatan Alias Segmentasi")
+        
         st.write(f'You have selected division {n_clusters} cluster.')
 
-        # Apply the KMeans model to the selected number of clusters
-        model = KMeans(n_clusters=n_clusters, random_state=42)
-        model.fit(df_RFM)
-
-        df_sub = df_RFM.copy()
-        df_sub['Cluster'] = model.labels_
-
-        #Descriptive statistics and statistics by cluster
-        cluster_stats = df_sub.groupby('Cluster').agg({
-            'Recency': 'mean',
-            'Frequency': 'mean',
-            'Monetary': ['mean', 'count']
-        }).round(2)
-
-        cluster_stats.columns = ['RecencyMean', 'FrequencyMean', 'MonetaryMean', 'Count']
-        cluster_stats['Percent'] = (cluster_stats['Count'] / cluster_stats['Count'].sum() * 100).round(2)
-
-        # Reset index so 'Cluster' becomes a regular column, instead of index
-        cluster_stats.reset_index(inplace=True)
-
-       # Rename cluster groups for better readability
-        cluster_stats['Cluster'] = 'Cluster ' + cluster_stats['Cluster'].astype('str')
-
-        st.subheader('Statistics by each Cluster')
-        st.dataframe(cluster_stats)
-
-        # Biểu đồ Scatter
-        fig_scatter = px.scatter(
-            cluster_stats,
-            x='RecencyMean',
-            y='MonetaryMean',
-            size='FrequencyMean',
-            color='Cluster',
-            log_x=True,
-            size_max=60
-        )
-        st.plotly_chart(fig_scatter, use_container_width=True)
         
-        #Tree Map chart
-        # Set color for each cluster - you can change this at your discretion
-        colors_dict = {
-            0: 'green',
-            1: 'red',
-            2: 'royalblue',
-            3: 'orange',
-            4: 'purple'
+        # Perform K-Means clustering
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+        df['Cluster'] = kmeans.fit_predict(df[['Recency', 'Frequency', 'Monetary','Quantity','Weight']])
+        
+        df = pd.DataFrame(df)
+        st.write("Data Cluster")
+        original_data = df[['Cluster','Recency', 'Frequency', 'Monetary','Quantity','Weight']]
+        
+        evaluated_df_grouped = original_data.groupby('Cluster').agg({
+            'Recency': 'mean',      # Mean of Recency in each group
+            'Frequency': 'mean',    # Mean of Frequency in each group
+            'Monetary': 'mean',    # Mean of Frequency in each group
+            'Quantity': 'mean',     # Mean of Quantity in each group
+            'Weight': 'mean'    # Take the first Cluster value (assuming it's the same for all rows in the group)
+         
+        }).reset_index()
+        
+        st.write(evaluated_df_grouped)
+        
+        # Define customer group names
+        group_names = {
+            0: "Brown",
+            1: "Silver",
+            2: "Gold",
+            3: "Diamond",
         }
-        fig_treemap, ax_treemap = plt.subplots()  # Create separate fig and ax objects for the Tree Map chart
-        fig_treemap.set_size_inches(14, 10)
-
-        squarify.plot(sizes=cluster_stats['Count'], 
-                    label=[f'Cụm {i}\n{row.RecencyMean} ngày\n{row.FrequencyMean} đơn hàng\n{row.MonetaryMean} $\n{row.Count} khách hàng ({row.Percent}%)' 
-                            for i, row in cluster_stats.iterrows()],
-                    color=[colors_dict.get(cluster) for cluster in cluster_stats.index],
-                    alpha=0.6,
-                    text_kwargs={'fontsize':12, 'fontweight':'bold'})
-
-        ax_treemap.set_title("Phân Khúc Khách Hàng", fontsize=26, fontweight="bold")
-        ax_treemap.axis('off')
-        st.pyplot(fig_treemap)
-
-        # Draw a 3D scatter plot chart
-        fig_3d = px.scatter_3d(
-            cluster_stats,
-            x='RecencyMean',
-            y='FrequencyMean',
-            z='MonetaryMean',
-            color='Cluster',
-            size='Count',
-            labels={'RecencyMean': 'Recency', 'FrequencyMean': 'Frequency', 'MonetaryMean': 'Monetary'}
-        )
-
-        st.plotly_chart(fig_3d, use_container_width=True)
-
-        # Add button to export model
-        if st.button('Export Model'):
-            # Save the model to a .pkl file
-            with open('kmeans_model.pkl', 'wb') as f:
-                pickle.dump((model, cluster_stats), f)
-            
-            st.session_state.model_exported = True
-            st.write('The model (kmeans_model.pkl) was exported successfully!')
-
         
+        # Assign customer group names based on the cluster
+        df['Customer Group'] = df['Cluster'].map(group_names)
+        
+        # Sort the DataFrame by the 'Cluster' column
+        df.sort_values('Cluster', inplace=True)
+
+        # Size of each group
+        group_size = df['Customer Group'].value_counts().sort_index()
+        # Average LRFMP variables per group
+        average_lrfmp_per_group = df.groupby('Customer Group')[['Recency', 'Frequency', 'Monetary','Quantity','Weight']].mean()
+        # Rename the columns
+        average_lrfmp_per_group = average_lrfmp_per_group.rename(columns={
+            'Recency': 'R_Avg',
+            'Frequency': 'F_Avg',
+            'Monetary': 'M_Avg',
+            'Quantity': 'Q_Avg',
+            'Weight': 'W_Avg'
+        })
+        
+        # RFMQW scores with symbols for upper and lower bounds
+        interpretation = lambda x: f"↑ {x + 0.1:.2f} ↓ {x - 0.1:.2f}"  # Example: Upper bound +0.1, Lower bound -0.1
+        lrfmp_scores_with_symbols = average_lrfmp_per_group.applymap(interpretation)
+
+        # Percentage of each group size
+        group_size_percentage = (group_size / len(df)) * 100
+
+        #st.write(pd.concat([group_size, group_size_percentage, average_lrfmp_per_group, lrfmp_scores_with_symbols], axis=1).fillna(0))
+        st.write("Group Size")
+        st.write(group_size)
+        st.write("Average")
+        st.write(average_lrfmp_per_group)  
+        st.write("Score")     
+        st.write(lrfmp_scores_with_symbols)
+        st.write("Precentage")
+        st.write(group_size_percentage)
+        
+        df = pd.DataFrame(df)
+        st.write("Cluster With Alias")
+        
+        data_with_alias = df[['Customer Group','Cust_Phone','Cluster','Recency', 'Frequency', 'Monetary','Quantity','Weight']]
+
+                # Assuming evaluated_df is your DataFrame
+        evaluated_df_grouped = data_with_alias.groupby('Customer Group').agg({
+            'Cluster': 'mean',
+            'Cust_Phone': 'count',  # Count of rows in each group
+            'Recency': 'mean',      # Mean of Recency in each group
+            'Frequency': 'mean',    # Mean of Frequency in each group
+            'Quantity': 'mean',     # Mean of Quantity in each group
+            'Weight': 'mean'    # Take the first Cluster value (assuming it's the same for all rows in the group)
+         
+        }).reset_index()
+        
+        st.write(evaluated_df_grouped)
+        
+        
+        # Menentukan fitur untuk visualisasi box plot customer group
+        features_for_boxplot = ['Recency', 'Frequency', 'Monetary', 'Quantity', 'Weight']
+
+        # Membuat figure dengan ukuran tertentu
+        fig, axes = plt.subplots(nrows=2, ncols=3, figsize=(15, 8))
+
+        # Menampilkan box plot untuk setiap fitur dalam setiap kelompok pelanggan
+        for i, feature in enumerate(features_for_boxplot):
+            row_index = i // 3
+            col_index = i % 3
+            ax = axes[row_index, col_index]
+            
+            sns.boxplot(x='Customer Group', y=feature, data=df, palette='viridis', ax=ax)
+            ax.set_title(f'Box Plot of {feature} across Customer Groups')
+
+        # Mengatur layout dan menampilkan plot
+        plt.tight_layout()
+        plt.show()
+        st.pyplot(fig)
+  
+  
+        st.write('## ##Evaluasi : Silhoutte,Purity dan Entropy')
+        # Memilih fitur untuk klasterisasi (RFMQW)
+        features = df[['Recency', 'Frequency', 'Monetary', 'Quantity', 'Weight']]
+
+        st.write(f'You have selected division {n_clusters} cluster.')
+
+   
+        # Pelatihan model K-Means
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+        df['Cluster'] = kmeans.fit_predict(df[['Recency', 'Frequency', 'Monetary','Quantity','Weight']])
+        
+
+        # Evaluasi dengan metode silhouette
+        silhouette_avg = silhouette_score(features, df['Cluster'])
+
+        # Evaluasi dengan metode entropy
+        label_encoder = LabelEncoder()
+        true_labels_numeric = label_encoder.fit_transform(df['Customer Group'])
+        predicted_labels = df['Cluster']
+        cluster_distribution = np.bincount(predicted_labels) / len(predicted_labels)
+        entropy_value = entropy(cluster_distribution, base=2)
+
+        # Menggunakan confusion matrix untuk menghitung Purity
+        conf_matrix = confusion_matrix(true_labels_numeric, predicted_labels)
+        purity = np.sum(np.amax(conf_matrix, axis=0)) / np.sum(conf_matrix)
+
+        # Menambahkan hasil evaluasi ke DataFrame
+        df['Silhouette'] = silhouette_avg
+        df['Entropy'] = entropy_value
+        df['Purity'] = purity
+
+        # # Menampilkan DataFrame dengan hasil evaluasi
+        evaluated_df = df[['Cust_Phone','Customer Group', 'Recency', 'Frequency', 'Quantity', 'Weight', 'Cluster', 'Silhouette', 'Purity', 'Entropy']]
+        # st.write(evaluated_df)
+        
+        # Assuming evaluated_df is your DataFrame
+        evaluated_df_grouped = evaluated_df.groupby('Customer Group').agg({
+            'Cust_Phone': 'count',  # Count of rows in each group
+            'Recency': 'mean',      # Mean of Recency in each group
+            'Frequency': 'mean',    # Mean of Frequency in each group
+            'Quantity': 'mean',     # Mean of Quantity in each group
+            'Weight': 'mean',       # Mean of Weight in each group
+            'Cluster': 'first',     # Take the first Cluster value (assuming it's the same for all rows in the group)
+            'Silhouette': 'mean',   # Mean of Silhouette in each group
+            'Purity': 'mean',       # Mean of Purity in each group
+            'Entropy': 'mean'       # Mean of Entropy in each group
+        }).reset_index()
+
+        st.write(evaluated_df_grouped)
+
+        # Visualisasi Purity, Silhouette, dan Entropy
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+        # Purity per Cluster
+        cluster_labels = np.unique(predicted_labels)
+        purity_values = [np.max(conf_matrix[:, cluster_label]) / np.sum(conf_matrix[:, cluster_label]) for cluster_label in cluster_labels]
+
+        axes[0].bar(cluster_labels, purity_values, color='blue')
+        axes[0].set_title('Purity per Cluster')
+        axes[0].set_xlabel('Cluster')
+        axes[0].set_ylabel('Purity')
+
+        # Silhouette plot for each cluster
+        sample_silhouette_values = silhouette_samples(features, df['Cluster'])
+        y_lower = 10
+
+        for i in range(k):
+            ith_cluster_silhouette_values = sample_silhouette_values[df['Cluster'] == i]
+            ith_cluster_silhouette_values.sort()
+            size_cluster_i = ith_cluster_silhouette_values.shape[0]
+            y_upper = y_lower + size_cluster_i
+            color = cm.nipy_spectral(float(i) / k)
+            axes[1].fill_betweenx(np.arange(y_lower, y_upper), 0, ith_cluster_silhouette_values,
+                                facecolor=color, edgecolor=color, alpha=0.7)
+            axes[1].text(-0.05, y_lower + 0.5 * size_cluster_i, str(i))
+            y_lower = y_upper + 10
+
+        axes[1].set_title('Silhouette plot for each cluster')
+        axes[1].set_xlabel('Silhouette score')
+        axes[1].set_ylabel('Cluster')
+
+        # Entropy per Cluster
+        entropy_values = [entropy(conf_matrix[:, cluster_label], base=2) for cluster_label in cluster_labels]
+
+        axes[2].bar(cluster_labels, entropy_values, color='blue')
+        axes[2].set_title('Entropy per Cluster')
+        axes[2].set_xlabel('Cluster')
+        axes[2].set_ylabel('Entropy')
+
+        plt.tight_layout()
+        plt.show()
+        st.pyplot(fig)
+        
+
     else:
         st.write("No data available. Please upload a file in the 'Data Understanding' section.")
 
-elif choice == 'Predict':
-    
-    if 'model_exported' in st.session_state and st.session_state.model_exported:
-       # Reload model and cluster_stats
-        with open('kmeans_model.pkl', 'rb') as f:
-            model, cluster_stats = pickle.load(f)
 
-        st.subheader('Statistics by each Cluster')
-        st.dataframe(cluster_stats)
-        
-        # New section added to receive data from users and make predictions
-        st.subheader("Cluster Prediction for a New Customer")
-                
-        # Receive data from user
-        customer_name = st.text_input('Customer Name:')
-        recent_date = st.date_input('Date of most recent purchase:')
-        quantity = st.number_input('Quantity:', min_value=0)
-        monetary = st.number_input('Monetary:', min_value=0.0)
-        
-        if 'df_new' not in st.session_state:
-            st.session_state['df_new'] = pd.DataFrame(columns=['Customer_id', 'day', 'Quantity', 'Sales'])
-
-        if st.button("Add"):
-            new_data = pd.DataFrame({'Customer_id': [customer_name], 'day': [recent_date], 'Quantity': [quantity], 'Sales': [monetary]})
-            if 'df_new' not in st.session_state:
-                st.session_state['df_new'] = new_data
-            else:
-                st.session_state['df_new'] = pd.concat([st.session_state['df_new'], new_data], ignore_index=True)
-            
-        st.write("Added Data")
-        st.dataframe(st.session_state['df_new'])  # Hiển thị DataFrame sau khi người dùng nhấn "Add"
-
-        # When the user presses the "Predict" button, cluster prediction is performed
-        if st.button("Forecast"):
-            # Calculate Recency, Frequency, and Monetary values
-            recent_date = pd.Timestamp.now().date()  # Update current date
-            df_RFM = st.session_state['df_new'].groupby('Customer_id').agg({
-                'day': lambda x: (recent_date - x.max()).days,  # Recency
-                'Customer_id': 'count',  # Frequency
-                'Sales': 'sum'  # Monetary
-            }).rename(columns={'day': 'Recency', 'Customer_id': 'Frequency', 'Sales': 'Monetary'})
-
-            # Predict clusters using the trained model
-            cluster_pred = model.predict(df_RFM)
-            
-           # Add prediction column to df_RFM
-            df_RFM['Cluster'] = cluster_pred
-
-            # Display the resulting DataFrame
-            st.write("Predicted results:")
-            st.dataframe(df_RFM)
-            
-            # Allow users to download results as CSV
-            csv_download_link(df_RFM, 'RFM_prediction_results.csv', 'Download prediction results')
-        
-    else:
-        st.write("You must export the model before making predictions.")
