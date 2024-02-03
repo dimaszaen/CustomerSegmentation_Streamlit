@@ -160,7 +160,7 @@ elif choice == 'Data preparation':
     df = pd.merge(df, weight_df, on='Cust_Phone', how='left')
 
     # Tampilkan hasil
-    st.write(df[['Cust_Phone', 'Recency', 'Frequency', 'Monetary','Quantity', 'Weight',]])
+    st.write(df[['Cust_Phone', 'Recency', 'Frequency', 'Monetary','Quantity', 'Weight']])
     
     st.write("### Normalisasi Data")
     # Calculate 'Length' based on the difference between the current date and the minimum date
@@ -168,7 +168,7 @@ elif choice == 'Data preparation':
     analysis_date = pd.to_datetime('2024-01-01')
 
     # Select the columns you want to normalize
-    columns_to_normalize = ['Recency', 'Frequency', 'Monetary', 'Quantity', 'Weight']
+    columns_to_normalize = df[['Recency', 'Frequency', 'Monetary', 'Quantity', 'Weight']]
 
     # Initialize the MinMaxScaler
     scaler = MinMaxScaler()
